@@ -60,6 +60,7 @@ const parseChannels = async (dbClient) => {
           description,
           media,
           sended: false,
+          deleted: false,
         }
       })
   
