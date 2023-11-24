@@ -41,14 +41,20 @@ const parseChannels = async (dbClient) => {
         const enclosure = post.enclosure;
         if (Array.isArray(enclosure)) {
           enclosure.forEach(mediaItem => {
+            const uuid = 'xxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16));
+
             media.push({
+              uuid,
               url: mediaItem['@_url'],
               type: mediaItem['@_type'],
               length: mediaItem['@_length']
             })
           })
         } else if (enclosure) {
+          const uuid = 'xxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16));
+
           media.push({
+            uuid,
             url: enclosure['@_url'],
             type: enclosure['@_type'],
             length: enclosure['@_length']

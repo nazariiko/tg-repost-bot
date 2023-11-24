@@ -39,6 +39,7 @@ class Bot {
     this.dbClient = dbClient
     this.chatId = chatId
     this.sendedPostMessages = [];
+    this.sendedMediaItemsForDelete = [];
     this.currentEditingPostLink = null;
     this.currentPublishChannel = null;
     this.commandsHandler = new CommandsHandler(this.tgBot, this.dbClient, this.chatId)
@@ -159,7 +160,7 @@ class Bot {
           this.sendedPostMessages.push(msg3)
         }
 
-        // await this.setPostIsSended(post)
+        await this.setPostIsSended(post)
         resolve(true)
       } catch (error) {
         resolve(true)
@@ -217,7 +218,26 @@ class Bot {
         return
       }
 
+      if ((message.photo || message.video) && this.state.page === 'editPostPage') {
+        const media = message.photo ? message.photo[0] : message.video;
+    
+        const newMedia = {
+          uuid: 'xxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16)),
+          url: media.file_id,
+          type: message.photo ? 'image/jpeg' : 'video/mp4',
+          length: +media.file_size,
+        };
+        
+        await this.addNewMediaItem(newMedia)
+        await this.goToEditingScreen(this.currentEditingPostLink)
+        return
+      }
+
       switch (text) {
+        case '/start':
+          this.goToStartScreen();
+          break;
+
         // start page
         case botConstants.commands.updateSubscribedChannels:
           this.commandsHandler.sendUpdateSubscribedChannels()
@@ -250,8 +270,16 @@ class Bot {
           await this.commandsHandler.sendEditTextMessage()
           break;
 
+        case botConstants.commands.addSubcribe:
+          await this.sendAddSubscribeMessage()
+          break;
+
         case botConstants.commands.publishPost:
           await this.goToPublishScreen()
+          break;
+
+        case botConstants.commands.editMedia:
+          await this.handleEditMediaButtonClick()
           break;
 
         // publishing page
@@ -292,11 +320,18 @@ class Bot {
 
       const action = callbackData.split('::')[0]
       const data = callbackData.split('::')[1]
+      let status;
 
       switch (action) {
         case botConstants.commands.deletePost:
           await this.setPostIsDeleted(data);
           await this.deleteMessageFromChat(messageId);
+          break;
+
+        case botConstants.commands.deleteMediaItem:
+          await this.handleDeleteMediaItem(data);
+          await this.deleteMediaItemFromChat(messageId);
+          await this.sendSimpleMessage(botConstants.messages.mediaItemDeleted, botConstants.markups.editPostMarkup)
           break;
 
         case botConstants.commands.editPost:
@@ -307,10 +342,134 @@ class Bot {
           this.currentPublishChannel = data;
           await this.commandsHandler.sendPublishChannelChosen();
           break;
+
+        case botConstants.commands.addSubscribeChannel:
+          const currentPost = await this.getCurrentEditedPost()
+          const newDescription = `${currentPost.description}\n\n@${data}`
+          const formattedHTMLMsg = toHTML({ text: newDescription });
+          status = await this.handleEditText(formattedHTMLMsg)
+          if (status.ok) {
+            await this.commandsHandler.sendSuccessfullyEditedText()
+            await this.goToEditingScreen(this.currentEditingPostLink)
+          } else {
+            await this.commandsHandler.sendErrorEditedText(status.error)
+          }
+          break;
       
         default:
           break;
       }
+    })
+  }
+
+  addNewMediaItem(newMedia) {
+    return new Promise(async (resolve, reject) => {
+      await this.db.collection("connections").findOneAndUpdate(
+        { chatId: this.chatId, "posts.link": this.currentEditingPostLink },
+        { $push: { "posts.$.media": newMedia } }
+      )
+      resolve(true)
+    })
+  }
+
+  handleDeleteMediaItem(uuid) {
+    return new Promise(async (resolve, reject) => {
+      await this.db.collection("connections").findOneAndUpdate(
+        { chatId: this.chatId, "posts.link": this.currentEditingPostLink },
+        { $pull: { "posts.$.media": { uuid: uuid } } }
+      )
+      resolve(true)
+    })
+  }
+
+  async handleEditMediaButtonClick() {
+    const currentConnection = await this.db.collection("connections").findOne(
+      { chatId: this.chatId },
+    )
+    const currentEditedPost = currentConnection.posts.find(post => post.link === this.currentEditingPostLink)
+    const mediaItems = currentEditedPost.media;
+    if (mediaItems.length) {
+      await this.sendSimpleMessage(botConstants.messages.yourMediaItems, botConstants.markups.editPostMarkup)
+      await this.sendMediaItemsForDelete(mediaItems)
+      await this.sendSimpleMessage(botConstants.messages.afterMediaItemsSended, botConstants.markups.editPostMarkup)
+    } else {
+      await this.sendSimpleMessage(botConstants.messages.emptyMediaItems, botConstants.markups.editPostMarkup)
+    }
+  }
+
+  sendSimpleMessage(message, reply_markup) {
+    return new Promise(async (resolve) => {
+      await this.tgBot.sendMessage(this.chatId, message, 
+        { parse_mode: 'HTML', reply_markup }
+      )
+      resolve(true)
+    })
+  }
+
+  sendMediaItemsForDelete(mediaItems) {
+    return new Promise(async (resolve) => {
+      const mediaGroup = [];
+      mediaItems.forEach((media) => {
+        const type = botConstants.mediaTypes[media['type']];
+        const url = media.url;
+        
+        const mediaObj = {
+          uuid: media.uuid,
+          type,
+          media: url
+        }
+
+        mediaGroup.push(mediaObj)
+      })
+
+      for (const mediaGroupItem of mediaGroup) {
+        let msg;
+        switch (mediaGroupItem.type) {
+          case 'photo':
+            msg = await this.tgBot.sendPhoto(this.chatId, mediaGroupItem.media, {
+              reply_markup: { 
+                inline_keyboard: [
+                  [{ text: 'Удалить ❌', callback_data: `delete_media_item::${mediaGroupItem.uuid}` }],
+                ],
+              }
+            })
+            this.sendedMediaItemsForDelete.push(msg)
+            break;
+
+          case 'video':
+            msg = await this.tgBot.sendVideo(this.chatId, mediaGroupItem.media, {
+              reply_markup: { 
+                inline_keyboard: [
+                  [{ text: 'Удалить ❌', callback_data: `delete_media_item::${mediaGroupItem.uuid}` }],
+                ], 
+              }
+            })
+            this.sendedMediaItemsForDelete.push(msg)
+            break;
+        
+          default:
+            break;
+        }
+      }
+
+      resolve()
+    })
+  }
+
+  getCurrentEditedPost() {
+    return new Promise(async (resolve) => {
+      const currentConnection = await this.db.collection("connections").findOne(
+        { chatId: this.chatId },
+      )
+      const post = currentConnection.posts.find(post => post.link === this.currentEditingPostLink)
+      resolve(post)
+    })
+  }
+
+  sendAddSubscribeMessage() {
+    return new Promise(async (resolve, reject) => {
+      const myChanels = await this.getMyChannels();
+      await this.sendMessageWithChoseSubscribe(myChanels);
     })
   }
 
@@ -444,6 +603,23 @@ class Bot {
     )
   }
 
+  async sendMessageWithChoseSubscribe(channels) {
+    await this.tgBot.sendMessage(this.chatId, botConstants.messages.choseChannelForAddSubscribe,
+      { parse_mode: 'HTML', 
+        reply_markup: { 
+          inline_keyboard: [
+            channels.map(channel => {
+              return {
+                text: channel,
+                callback_data: `add_subscribe_channel::${channel}`
+              }
+            })
+          ], 
+        } 
+      }
+    )
+  }
+
   async getMyChannels() {
     const currentConnection = await this.db.collection("connections").findOne({ chatId: this.chatId })
     const channels = currentConnection.myChannels || []
@@ -457,6 +633,12 @@ class Bot {
       const post = posts.find(post => post.link == link)
 
       try {
+        if (!post.media.length && !post.description.trim()) {
+          this.sendSimpleMessage(botConstants.messages.emptyPostError, botConstants.markups[markup])
+          resolve(true)
+          return;
+        }
+
         if (post.media.length) {
           const mediaGroup = [];
           post.media.forEach((media) => {
@@ -518,6 +700,11 @@ class Bot {
       )
       resolve(true)
     })
+  }
+
+  async deleteMediaItemFromChat(msgId) {
+    this.sendedPostMessages = this.sendedPostMessages.filter(msg => msg.message_id !== msgId)
+    return await this.tgBot.deleteMessage(this.chatId, msgId)
   }
 
   async deleteMessageFromChat(msgId) {

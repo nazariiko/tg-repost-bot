@@ -7,13 +7,17 @@ const botConstants = {
     'startWatcher': 'Запустить отслеживание',
     'stopWatcher': 'Остановить отслеживание',
     'deletePost': 'delete_post',
+    'deleteMediaItem': 'delete_media_item',
     'editPost': 'edit_post',
     'back': 'Назад',
     'editText': 'Редактировать текст',
     'publishPost': 'Опубликовать',
     'chosePublishChannel': 'chose_publish_channel',
+    'addSubscribeChannel': 'add_subscribe_channel',
     'publishNow': 'Опубликовать сейчас',
-    'changePublishChannel': 'Сменить канал публикации'
+    'changePublishChannel': 'Сменить канал публикации',
+    'addSubcribe': 'Добавить подпись',
+    'editMedia': 'Вставить/Удалить креатив',
   },
 
   messages: {
@@ -32,9 +36,15 @@ const botConstants = {
     'editText': 'Отредактируйте текст и отправьте ответом на это сообщение.',
     'currentPublishingPost': 'Текущий пост для публикации:',
     'choseChannelForPublish': 'Выберете канал в который опубликуется пост:',
+    'choseChannelForAddSubscribe': 'Выберете канал для добавления подписи:',
     'publishChannelChosen': 'Канал для публикации выбран. Теперь вы можете опубликовать пост.',
     'errorPublishPost': 'Ошибка публикации поста.',
-    'successfullyPublishPost': 'Пост успешно опубликован.'
+    'successfullyPublishPost': 'Пост успешно опубликован.',
+    'emptyMediaItems': 'В текущем посте нет медиа элементов. Для добавления отправьте мне фото/видео. Отправляйте по одному медиа-элементу.',
+    'yourMediaItems': 'Список текущих медиа элементов:',
+    'afterMediaItemsSended': 'Чтобы удалить медиа элемент нажмите кнопку под фото/видео. Для добавления отправьте мне фото/видео. Отправляйте по одному медиа-элементу.',
+    'emptyPostError': 'В вашем посте не осталось ни медиа ни контента. Такой пост вы не сможете опубликовать(',
+    'mediaItemDeleted': 'Медиа элемент успешно удален.'
   },
 
   markups: {
