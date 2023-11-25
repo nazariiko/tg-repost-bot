@@ -6,7 +6,7 @@ import { connectToDatabase } from './db.js';
 import botConstants from './constants.js';
 import parseChannels from './parseChannels.js';
 
-(async () => {
+(async () => {;
   const tgBot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true })
   const clients = [];
   const dbClient = await connectToDatabase()
@@ -44,7 +44,7 @@ class Bot {
     this.currentPublishChannel = null;
     this.commandsHandler = new CommandsHandler(this.tgBot, this.dbClient, this.chatId)
     this.state = {
-      page: 'startPage', // ['startPage', 'editPostPage', 'publishScreen']
+      page: 'startPage', // ['startPage', 'editPostPage', 'publishScreen', 'gptPage']
       active: true,
       isSenderBlocked: false,
     }
@@ -160,7 +160,7 @@ class Bot {
           this.sendedPostMessages.push(msg3)
         }
 
-        await this.setPostIsSended(post)
+        // await this.setPostIsSended(post)
         resolve(true)
       } catch (error) {
         resolve(true)
@@ -188,6 +188,17 @@ class Bot {
             } else {
               this.commandsHandler.sendErrorUpdatedSubscribedChannels(status.error)
             }
+            break;
+
+          case botConstants.messages.delayMessage:
+            const hours = +(text.split(':')[0])
+            const minutes = +(text.split(':')[1])
+            const seconds = hours * 60 * 60 + minutes * 60;
+            this.delayPostPublish(seconds)
+            await this.sendSimpleMessage(botConstants.messages.successDelayMessage, botConstants.markups.publishPostMarkup);
+            setTimeout(() => {
+              this.goToStartScreen();
+            }, 2000);
             break;
 
           case botConstants.messages.updateMyChannels:
@@ -282,9 +293,17 @@ class Bot {
           await this.handleEditMediaButtonClick()
           break;
 
+        case botConstants.commands.goToGPT:
+          await this.goToGPT()
+          break;
+
         // publishing page
         case botConstants.commands.publishNow:
           await this.handlePublishNow()
+          break;
+
+        case botConstants.commands.delayPublish:
+          await this.handleDelayMessageClick()
           break;
 
         case botConstants.commands.changePublishChannel:
@@ -299,6 +318,10 @@ class Bot {
               break;
 
             case 'publishScreen':
+              await this.goToEditingScreen(this.currentEditingPostLink);
+              break;
+
+            case 'gptPage':
               await this.goToEditingScreen(this.currentEditingPostLink);
               break;
           
@@ -360,6 +383,82 @@ class Bot {
           break;
       }
     })
+  }
+
+  async goToGPT() {
+    this.state.page = 'gptPage'
+    this.state.isSenderBlocked = true;
+    await this.sendSimpleMessage(botConstants.messages.currentPost, botConstants.markups.chatGPTMarkup)
+    await this.sendPostWithoutButtons(this.currentEditingPostLink, 'chatGPTMarkup')
+  }
+
+  delayPostPublish(seconds) {
+    const currentPostLink = this.currentEditingPostLink;
+    const publishedChannel = this.currentPublishChannel;
+
+    setTimeout(async () => {
+      const currentConnection = await this.db.collection("connections").findOne({ chatId: this.chatId })
+      const posts = currentConnection.posts;
+      const post = posts.find(post => post.link == currentPostLink)
+
+      try {
+        if (post.media.length) {
+          const mediaGroup = [];
+          post.media.forEach((media) => {
+            const type = botConstants.mediaTypes[media['type']];
+            const url = media.url;
+            
+            const mediaObj = {
+              type,
+              media: url
+            }
+  
+            mediaGroup.push(mediaObj)
+          })
+  
+          await this.tgBot.sendMediaGroup(`@${publishedChannel}`, mediaGroup)
+          let description = post.description
+          description = description.replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, '');
+          description = description.replaceAll('<br/>', '');
+          description = description.replaceAll('<br />', '');
+          description = description.replaceAll('</br>', '');
+          description = description.replace(/<img[^>]*>/g, '');
+          description = description.replace(/<a\s*[^>]*><\/a>/g, '');
+          description = description.trim()
+
+          if (!description) {
+            description = 'Выберите действие:'
+          }
+
+          await this.tgBot.sendMessage(`@${publishedChannel}`, description, { parse_mode: 'HTML' })
+        } else {
+          let description = post.description;
+          description = description.replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, '');
+          description = description.replaceAll('<br/>', '');
+          description = description.replaceAll('<br />', '');
+          description = description.replaceAll('</br>', '');
+          description = description.replace(/<img[^>]*>/g, '');
+          description = description.replace(/<a\s*[^>]*><\/a>/g, '');
+          description = description.trim();
+  
+          await this.tgBot.sendMessage(`@${publishedChannel}`, description, { parse_mode: 'HTML' })
+        }
+      } catch (error) {
+        console.log(error);
+      }
+    }, 1000 * seconds);
+  }
+
+
+  async handleDelayMessageClick() {
+    if (!this.currentPublishChannel) {
+      const myChanels = await this.getMyChannels();
+      await this.sendMessageWithChoseChannel(myChanels);
+    } else {
+      return await this.tgBot.sendMessage(this.chatId, botConstants.messages.delayMessage, 
+        { parse_mode: 'HTML', reply_markup: JSON.stringify({ force_reply: true }) }
+      )
+    }
   }
 
   addNewMediaItem(newMedia) {
