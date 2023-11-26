@@ -180,7 +180,7 @@ class Bot {
           this.sendedPostMessages.push(msg3);
         }
 
-        // await this.setPostIsSended(post);
+        await this.setPostIsSended(post);
         resolve(true);
       } catch (error) {
         resolve(true);
