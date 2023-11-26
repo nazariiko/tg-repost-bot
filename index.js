@@ -462,7 +462,7 @@ class Bot {
         messages: [
           {
             role: 'system',
-            content: `${text} В ответе должно быть максимум 4096 символов.`,
+            content: `${text}`,
           },
         ],
         model: 'gpt-4-1106-preview',
