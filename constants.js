@@ -20,6 +20,7 @@ const botConstants = {
     'editMedia': 'Вставить/Удалить креатив',
     'delayPublish': 'Отложить',
     'goToGPT': 'CHAT GPT',
+    'editOnGPTPage': 'Редактировать'
   },
 
   messages: {
@@ -49,7 +50,12 @@ const botConstants = {
     'mediaItemDeleted': 'Медиа элемент успешно удален.',
     'delayMessage': 'Напишите ответом на это сообщение время в формате HH:MM, через которое опубликуется ваш пост. Например 00:35 - через 35 минут.',
     'successDelayMessage': 'Публикация поста отложена.',
-    'currentPost': 'Текущий пост для редактирования:'
+    'currentPost': 'Текущий пост для редактирования:',
+    'gptScreenTip': 'На этом экране вы можете общаться с chatGPT отправляя сообщения в чат.',
+    'waitGPT': 'Подождите, chatGPT генерирует ответ...',
+    'editTextOnGPT': 'Отправьте новый текст поста ответом на это сообщение.',
+    'textSuccessEditedOnGPT': 'Текст поста успешно отредактирован.',
+    'textErrorEditedOnGPT': 'Ошибка редактирования поста'
   },
 
   markups: {

@@ -32,6 +32,7 @@ const parseChannels = async (dbClient) => {
       };
       const parser = new XMLParser(options);
       const json = parser.parse(data);
+      const channelName = json.rss.channel.title;
       const posts = json.rss.channel.item.map(post => {
         const link = post.link;
         let description = post.description
@@ -65,6 +66,9 @@ const parseChannels = async (dbClient) => {
           link,
           description,
           media,
+          channelName,
+          channelLink: `https://t.me/${channel}`,
+          channelNickname: channel,
           sended: false,
           deleted: false,
         }
