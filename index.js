@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import TelegramBot from 'node-telegram-bot-api';
 import { toHTML } from '@telegraf/entity';
-import OpenAI from 'openai';
+import OpenAI, { NotFoundError } from 'openai';
 import { connectToDatabase } from './db.js';
 import botConstants from './constants.js';
 import parseChannels from './parseChannels.js';
@@ -45,9 +45,11 @@ class Bot {
     this.openai = openai;
     this.sendedPostMessages = [];
     this.sendedMediaItemsForDelete = [];
+    this.afterEditHistory = [];
     this.gptMessages = [];
     this.currentEditingPostLink = null;
     this.currentPublishChannel = null;
+    this.globalMsg = null;
     this.commandsHandler = new CommandsHandler(this.tgBot, this.dbClient, this.chatId);
     this.state = {
       page: 'startPage', // ['startPage', 'editPostPage', 'publishScreen', 'gptPage']
@@ -178,7 +180,7 @@ class Bot {
           this.sendedPostMessages.push(msg3);
         }
 
-        await this.setPostIsSended(post);
+        // await this.setPostIsSended(post);
         resolve(true);
       } catch (error) {
         resolve(true);
@@ -189,6 +191,9 @@ class Bot {
   createEvents() {
     this.tgBot.on('message', async (message) => {
       if (this.chatId !== message.from.id) return;
+      if (this.state.page !== 'startPage') {
+        this.afterEditHistory.push(message);
+      }
 
       const text = message.text;
       const repliedMessage = message['reply_to_message'];
@@ -213,10 +218,11 @@ class Bot {
             const minutes = +text.split(':')[1];
             const seconds = hours * 60 * 60 + minutes * 60;
             this.delayPostPublish(seconds);
-            await this.sendSimpleMessage(
+            this.globalMsg = await this.sendSimpleMessage(
               botConstants.messages.successDelayMessage,
               botConstants.markups.publishPostMarkup,
             );
+            this.afterEditHistory.push(this.globalMsg);
             setTimeout(() => {
               this.goToStartScreen();
             }, 2000);
@@ -236,10 +242,12 @@ class Bot {
             const formattedHTMLMsg = toHTML({ text: text, entities: message.entities || [] });
             status = await this.handleEditText(formattedHTMLMsg);
             if (status.ok) {
-              await this.commandsHandler.sendSuccessfullyEditedText();
+              this.globalMsg = await this.commandsHandler.sendSuccessfullyEditedText();
+              this.afterEditHistory.push(this.globalMsg);
               await this.goToEditingScreen(this.currentEditingPostLink);
             } else {
-              await this.commandsHandler.sendErrorEditedText(status.error);
+              this.globalMsg = await this.commandsHandler.sendErrorEditedText(status.error);
+              this.afterEditHistory.push(this.globalMsg);
             }
             break;
 
@@ -247,15 +255,17 @@ class Bot {
             const formattedHTMLMsgGPT = toHTML({ text: text, entities: message.entities || [] });
             status = await this.handleEditText(formattedHTMLMsgGPT);
             if (status.ok) {
-              await this.sendSimpleMessage(
+              this.globalMsg = await this.sendSimpleMessage(
                 botConstants.messages.textSuccessEditedOnGPT,
                 botConstants.markups.chatGPTMarkup,
               );
+              this.afterEditHistory.push(this.globalMsg);
             } else {
-              await this.sendSimpleMessage(
+              this.globalMsg = await this.sendSimpleMessage(
                 botConstants.messages.textErrorEditedOnGPT,
                 botConstants.markups.chatGPTMarkup,
               );
+              this.afterEditHistory.push(this.globalMsg);
             }
             break;
 
@@ -322,12 +332,14 @@ class Bot {
         // editing page
         case botConstants.commands.editText:
           if (this.state.page !== 'editPostPage') return;
-          await this.commandsHandler.sendEditTextMessage();
+          this.globalMsg = await this.commandsHandler.sendEditTextMessage();
+          this.afterEditHistory.push(this.globalMsg);
           break;
 
         case botConstants.commands.addSubcribe:
           if (this.state.page !== 'editPostPage') return;
-          await this.sendAddSubscribeMessage();
+          this.globalMsg = await this.sendAddSubscribeMessage();
+          this.afterEditHistory.push(this.globalMsg);
           break;
 
         case botConstants.commands.publishPost:
@@ -359,25 +371,36 @@ class Bot {
         case botConstants.commands.changePublishChannel:
           if (this.state.page !== 'publishScreen') return;
           const myChanels = await this.getMyChannels();
-          await this.sendMessageWithChoseChannel(myChanels);
+          this.globalMsg = await this.sendMessageWithChoseChannel(myChanels);
+          this.afterEditHistory.push(this.globalMsg);
           break;
 
         // gpt page
         case botConstants.commands.editOnGPTPage:
           if (this.state.page !== 'gptPage') return;
-          await this.tgBot.sendMessage(this.chatId, botConstants.messages.editTextOnGPT, {
-            parse_mode: 'HTML',
-            reply_markup: JSON.stringify({ force_reply: true }),
-          });
+          this.globalMsg = await this.tgBot.sendMessage(
+            this.chatId,
+            botConstants.messages.editTextOnGPT,
+            {
+              parse_mode: 'HTML',
+              reply_markup: JSON.stringify({ force_reply: true }),
+            },
+          );
+          this.afterEditHistory.push(this.globalMsg);
           break;
 
         case botConstants.commands.updateContext:
           if (this.state.page !== 'gptPage') return;
           this.gptMessages = [];
-          await this.sendSimpleMessage(
+          this.globalMsg = await this.sendSimpleMessage(
             botConstants.messages.contextUpdated,
             botConstants.markups.chatGPTMarkup,
           );
+          this.afterEditHistory.push(this.globalMsg);
+          break;
+
+        case botConstants.commands.RephraseBOT:
+          this.handleSendBindMessageToGpt(botConstants.commands.RephraseBOT);
           break;
 
         // back commands
@@ -408,7 +431,8 @@ class Bot {
         text !== botConstants.commands.back &&
         text !== botConstants.commands.editOnGPTPage &&
         text !== botConstants.commands.goToGPT &&
-        text !== botConstants.commands.updateContext
+        text !== botConstants.commands.updateContext &&
+        text !== botConstants.commands.RephraseBOT
       ) {
         this.handleMessageToGPT(text);
       }
@@ -418,6 +442,7 @@ class Bot {
       const chatId = query.message.chat.id;
       const messageId = query.message.message_id;
       const callbackData = query.data;
+      let msg;
 
       if (this.chatId !== chatId) return;
 
@@ -434,10 +459,11 @@ class Bot {
         case botConstants.commands.deleteMediaItem:
           await this.handleDeleteMediaItem(data);
           await this.deleteMediaItemFromChat(messageId);
-          await this.sendSimpleMessage(
+          this.globalMsg = await this.sendSimpleMessage(
             botConstants.messages.mediaItemDeleted,
             botConstants.markups.editPostMarkup,
           );
+          this.afterEditHistory.push(this.globalMsg);
           break;
 
         case botConstants.commands.editPost:
@@ -446,7 +472,8 @@ class Bot {
 
         case botConstants.commands.chosePublishChannel:
           this.currentPublishChannel = data;
-          await this.commandsHandler.sendPublishChannelChosen();
+          this.globalMsg = await this.commandsHandler.sendPublishChannelChosen();
+          this.afterEditHistory.push(this.globalMsg);
           break;
 
         case botConstants.commands.addSubscribeChannel:
@@ -455,10 +482,12 @@ class Bot {
           const formattedHTMLMsg = toHTML({ text: newDescription });
           status = await this.handleEditText(formattedHTMLMsg);
           if (status.ok) {
-            await this.commandsHandler.sendSuccessfullyEditedText();
+            this.globalMsg = await this.commandsHandler.sendSuccessfullyEditedText();
+            this.afterEditHistory.push(this.globalMsg);
             await this.goToEditingScreen(this.currentEditingPostLink);
           } else {
-            await this.commandsHandler.sendErrorEditedText(status.error);
+            this.globalMsg = await this.commandsHandler.sendErrorEditedText(status.error);
+            this.afterEditHistory.push(this.globalMsg);
           }
           break;
 
@@ -468,8 +497,46 @@ class Bot {
     });
   }
 
+  async handleSendBindMessageToGpt(msg) {
+    const text = msg;
+    try {
+      switch (text) {
+        case botConstants.commands.RephraseBOT:
+          this.gptMessages.push({
+            role: 'user',
+            content: botConstants.bindedButtons.RephraseBOT,
+          });
+          this.globalMsg = await this.sendSimpleMessage(
+            botConstants.bindedButtons.RephraseBOT,
+            botConstants.markups.chatGPTMarkup,
+          );
+          this.afterEditHistory.push(this.globalMsg);
+          break;
+
+        default:
+          break;
+      }
+      const completion = await this.openai.chat.completions.create({
+        messages: this.gptMessages,
+        model: 'gpt-4-1106-preview',
+      });
+      const result = completion.choices[0]['message']['content'];
+      let msg = await this.sendSimpleMessage(result, botConstants.markups.chatGPTMarkup);
+      this.afterEditHistory.push(msg);
+      this.gptMessages.push({ role: 'assistant', content: result });
+    } catch (error) {
+      let msg = await this.sendSimpleMessage(`Ошибка ${error}`, botConstants.markups.chatGPTMarkup);
+      this.afterEditHistory.push(msg);
+      this.gptMessages = [];
+    }
+  }
+
   async handleMessageToGPT(text) {
-    await this.sendSimpleMessage(botConstants.messages.waitGPT, botConstants.markups.chatGPTMarkup);
+    let msg = await this.sendSimpleMessage(
+      botConstants.messages.waitGPT,
+      botConstants.markups.chatGPTMarkup,
+    );
+    this.afterEditHistory.push(msg);
     try {
       this.gptMessages.push({ role: 'user', content: text });
       const completion = await this.openai.chat.completions.create({
@@ -477,10 +544,12 @@ class Bot {
         model: 'gpt-4-1106-preview',
       });
       const result = completion.choices[0]['message']['content'];
-      await this.sendSimpleMessage(result, botConstants.markups.chatGPTMarkup);
+      let msg = await this.sendSimpleMessage(result, botConstants.markups.chatGPTMarkup);
+      this.afterEditHistory.push(msg);
       this.gptMessages.push({ role: 'assistant', content: result });
     } catch (error) {
-      await this.sendSimpleMessage(`Ошибка ${error}`, botConstants.markups.chatGPTMarkup);
+      let msg = await this.sendSimpleMessage(`Ошибка ${error}`, botConstants.markups.chatGPTMarkup);
+      this.afterEditHistory.push(msg);
       this.gptMessages = [];
     }
   }
@@ -489,15 +558,17 @@ class Bot {
     this.state.page = 'gptPage';
     this.gptMessages = [];
     this.state.isSenderBlocked = true;
-    await this.sendSimpleMessage(
+    let msg = await this.sendSimpleMessage(
       botConstants.messages.currentPost,
       botConstants.markups.chatGPTMarkup,
     );
+    this.afterEditHistory.push(msg);
     await this.sendPostWithoutButtons(this.currentEditingPostLink, 'chatGPTMarkup');
-    await this.sendSimpleMessage(
+    this.globalMsg = await this.sendSimpleMessage(
       botConstants.messages.gptScreenTip,
       botConstants.markups.chatGPTMarkup,
     );
+    this.afterEditHistory.push(this.globalMsg);
   }
 
   delayPostPublish(seconds) {
@@ -562,12 +633,15 @@ class Bot {
   async handleDelayMessageClick() {
     if (!this.currentPublishChannel) {
       const myChanels = await this.getMyChannels();
-      await this.sendMessageWithChoseChannel(myChanels);
+      let msg = await this.sendMessageWithChoseChannel(myChanels);
+      this.afterEditHistory.push(msg);
     } else {
-      return await this.tgBot.sendMessage(this.chatId, botConstants.messages.delayMessage, {
+      let msg = await this.tgBot.sendMessage(this.chatId, botConstants.messages.delayMessage, {
         parse_mode: 'HTML',
         reply_markup: JSON.stringify({ force_reply: true }),
       });
+      this.afterEditHistory.push(msg);
+      return msg;
     }
   }
 
@@ -604,27 +678,33 @@ class Bot {
     );
     const mediaItems = currentEditedPost.media;
     if (mediaItems.length) {
-      await this.sendSimpleMessage(
+      let msg = await this.sendSimpleMessage(
         botConstants.messages.yourMediaItems,
         botConstants.markups.editPostMarkup,
       );
+      this.afterEditHistory.push(msg);
       await this.sendMediaItemsForDelete(mediaItems);
-      await this.sendSimpleMessage(
+      this.globalMsg = await this.sendSimpleMessage(
         botConstants.messages.afterMediaItemsSended,
         botConstants.markups.editPostMarkup,
       );
+      this.afterEditHistory.push(this.globalMsg);
     } else {
-      await this.sendSimpleMessage(
+      this.globalMsg = await this.sendSimpleMessage(
         botConstants.messages.emptyMediaItems,
         botConstants.markups.editPostMarkup,
       );
+      this.afterEditHistory.push(this.globalMsg);
     }
   }
 
   sendSimpleMessage(message, reply_markup) {
     return new Promise(async (resolve) => {
-      await this.tgBot.sendMessage(this.chatId, message, { parse_mode: 'HTML', reply_markup });
-      resolve(true);
+      const msg = await this.tgBot.sendMessage(this.chatId, message, {
+        parse_mode: 'HTML',
+        reply_markup,
+      });
+      resolve(msg);
     });
   }
 
@@ -645,10 +725,9 @@ class Bot {
       });
 
       for (const mediaGroupItem of mediaGroup) {
-        let msg;
         switch (mediaGroupItem.type) {
           case 'photo':
-            msg = await this.tgBot.sendPhoto(this.chatId, mediaGroupItem.media, {
+            this.globalMsg = await this.tgBot.sendPhoto(this.chatId, mediaGroupItem.media, {
               reply_markup: {
                 inline_keyboard: [
                   [
@@ -660,11 +739,12 @@ class Bot {
                 ],
               },
             });
-            this.sendedMediaItemsForDelete.push(msg);
+            this.sendedMediaItemsForDelete.push(this.globalMsg);
+            this.afterEditHistory.push(this.globalMsg);
             break;
 
           case 'video':
-            msg = await this.tgBot.sendVideo(this.chatId, mediaGroupItem.media, {
+            this.globalMsg = await this.tgBot.sendVideo(this.chatId, mediaGroupItem.media, {
               reply_markup: {
                 inline_keyboard: [
                   [
@@ -676,7 +756,8 @@ class Bot {
                 ],
               },
             });
-            this.sendedMediaItemsForDelete.push(msg);
+            this.sendedMediaItemsForDelete.push(this.globalMsg);
+            this.afterEditHistory.push(this.globalMsg);
             break;
 
           default:
@@ -703,23 +784,27 @@ class Bot {
   sendAddSubscribeMessage() {
     return new Promise(async (resolve, reject) => {
       const myChanels = await this.getMyChannels();
-      await this.sendMessageWithChoseSubscribe(myChanels);
+      const msg = await this.sendMessageWithChoseSubscribe(myChanels);
+      resolve(msg);
     });
   }
 
   async handlePublishNow() {
     if (!this.currentPublishChannel) {
       const myChanels = await this.getMyChannels();
-      await this.sendMessageWithChoseChannel(myChanels);
+      let msg = await this.sendMessageWithChoseChannel(myChanels);
+      this.afterEditHistory.push(msg);
     } else {
       const result = await this.publishPostInMyChannel();
       if (result.ok) {
-        await this.commandsHandler.sendSuccessfullyPublishPost();
+        let msg = await this.commandsHandler.sendSuccessfullyPublishPost();
+        this.afterEditHistory.push(msg);
         setTimeout(() => {
           this.goToStartScreen();
         }, 2000);
       } else {
-        await this.commandsHandler.sendErrorPublishPost(result.error);
+        let msg = await this.commandsHandler.sendErrorPublishPost(result.error);
+        this.afterEditHistory.push(msg);
       }
     }
   }
@@ -807,7 +892,8 @@ class Bot {
     this.state.isSenderBlocked = true;
     this.currentEditingPostLink = data;
     this.currentPublishChannel = null;
-    await this.commandsHandler.sendEditPostMsg();
+    let msg = await this.commandsHandler.sendEditPostMsg();
+    this.afterEditHistory.push(msg);
     await this.sendPostWithoutButtons(data, 'editPostMarkup');
   }
 
@@ -816,48 +902,88 @@ class Bot {
     this.state.isSenderBlocked = false;
     this.currentEditingPostLink = null;
     this.currentPublishChannel = null;
+    await this.handleDeleteHistoryFromEditing();
     await this.commandsHandler.sendStartPageMsg();
+  }
+
+  handleDeleteHistoryFromEditing() {
+    return new Promise(async (resolve, reject) => {
+      for (const msg of this.afterEditHistory) {
+        try {
+          const msgId = msg.message_id;
+          if (!msgId) {
+            for (const item of msg) {
+              const msgId = item.message_id;
+              try {
+                await this.tgBot.deleteMessage(this.chatId, msgId);
+              } catch (error) {
+                console.log(error?.response?.body);
+                console.log(item);
+              }
+            }
+            continue;
+          }
+          await this.tgBot.deleteMessage(this.chatId, msgId);
+        } catch (error) {
+          console.log(error?.response?.body);
+          console.log(msg);
+        }
+      }
+      this.afterEditHistory = [];
+      resolve();
+    });
   }
 
   async goToPublishScreen() {
     this.state.page = 'publishScreen';
     this.state.isSenderBlocked = true;
-    await this.commandsHandler.sendPublishPostMsg();
+    let msg = await this.commandsHandler.sendPublishPostMsg();
+    this.afterEditHistory.push(msg);
     await this.sendPostWithoutButtons(this.currentEditingPostLink, 'publishPostMarkup');
     const myChanels = await this.getMyChannels();
-    await this.sendMessageWithChoseChannel(myChanels);
+    this.globalMsg = await this.sendMessageWithChoseChannel(myChanels);
+    this.afterEditHistory.push(this.globalMsg);
   }
 
   async sendMessageWithChoseChannel(channels) {
-    await this.tgBot.sendMessage(this.chatId, botConstants.messages.choseChannelForPublish, {
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          channels.map((channel) => {
-            return {
-              text: channel,
-              callback_data: `chose_publish_channel::${channel}`,
-            };
-          }),
-        ],
+    const msg = await this.tgBot.sendMessage(
+      this.chatId,
+      botConstants.messages.choseChannelForPublish,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            channels.map((channel) => {
+              return {
+                text: channel,
+                callback_data: `chose_publish_channel::${channel}`,
+              };
+            }),
+          ],
+        },
       },
-    });
+    );
+    return msg;
   }
 
   async sendMessageWithChoseSubscribe(channels) {
-    await this.tgBot.sendMessage(this.chatId, botConstants.messages.choseChannelForAddSubscribe, {
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          channels.map((channel) => {
-            return {
-              text: channel,
-              callback_data: `add_subscribe_channel::${channel}`,
-            };
-          }),
-        ],
+    return await this.tgBot.sendMessage(
+      this.chatId,
+      botConstants.messages.choseChannelForAddSubscribe,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            channels.map((channel) => {
+              return {
+                text: channel,
+                callback_data: `add_subscribe_channel::${channel}`,
+              };
+            }),
+          ],
+        },
       },
-    });
+    );
   }
 
   async getMyChannels() {
@@ -878,10 +1004,11 @@ class Bot {
 
       try {
         if (!post.media.length && !post.description.trim()) {
-          this.sendSimpleMessage(
+          let msg = this.sendSimpleMessage(
             botConstants.messages.emptyPostError,
             botConstants.markups[markup],
           );
+          this.afterEditHistory.push(msg);
           resolve(true);
           return;
         }
@@ -900,7 +1027,8 @@ class Bot {
             mediaGroup.push(mediaObj);
           });
 
-          await this.tgBot.sendMediaGroup(this.chatId, mediaGroup);
+          let msg = await this.tgBot.sendMediaGroup(this.chatId, mediaGroup);
+          this.afterEditHistory.push(msg);
           let description = post.description;
           description = description.replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, '');
           description = description.replaceAll('<br/>', '');
@@ -914,10 +1042,11 @@ class Bot {
             description = 'Выберите действие:';
           }
 
-          await this.tgBot.sendMessage(this.chatId, description, {
+          this.globalMsg = await this.tgBot.sendMessage(this.chatId, description, {
             parse_mode: 'HTML',
             reply_markup: botConstants.markups[markup],
           });
+          this.afterEditHistory.push(this.globalMsg);
         } else {
           let description = post.description;
           description = description.replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, '');
@@ -928,10 +1057,11 @@ class Bot {
           description = description.replace(/<a\s*[^>]*><\/a>/g, '');
           description = description.trim();
 
-          await this.tgBot.sendMessage(this.chatId, description, {
+          let msg = await this.tgBot.sendMessage(this.chatId, description, {
             parse_mode: 'HTML',
             reply_markup: botConstants.markups[markup],
           });
+          this.afterEditHistory.push(msg);
         }
 
         resolve(true);
@@ -1061,7 +1191,8 @@ class CommandsHandler {
   }
 
   async sendEditPostMsg() {
-    await this.tgBot.sendMessage(this.chatId, botConstants.messages.currentEditingPost);
+    let msg = await this.tgBot.sendMessage(this.chatId, botConstants.messages.currentEditingPost);
+    return msg;
   }
 
   async sendPublishPostMsg() {
@@ -1072,10 +1203,15 @@ class CommandsHandler {
   }
 
   async sendPublishChannelChosen() {
-    await this.tgBot.sendMessage(this.chatId, botConstants.messages.publishChannelChosen, {
-      parse_mode: 'HTML',
-      reply_markup: botConstants.markups.publishPostMarkup,
-    });
+    let msg = await this.tgBot.sendMessage(
+      this.chatId,
+      botConstants.messages.publishChannelChosen,
+      {
+        parse_mode: 'HTML',
+        reply_markup: botConstants.markups.publishPostMarkup,
+      },
+    );
+    return msg;
   }
 
   async stopWatcherMessage() {
@@ -1107,10 +1243,11 @@ class CommandsHandler {
   }
 
   async sendEditTextMessage() {
-    await this.tgBot.sendMessage(this.chatId, botConstants.messages.editText, {
+    const msg = await this.tgBot.sendMessage(this.chatId, botConstants.messages.editText, {
       parse_mode: 'HTML',
       reply_markup: JSON.stringify({ force_reply: true }),
     });
+    return msg;
   }
 
   async sendSuccessfullyUpdatedSubscribedChannels() {
@@ -1130,18 +1267,24 @@ class CommandsHandler {
   }
 
   async sendSuccessfullyPublishPost() {
-    await this.tgBot.sendMessage(this.chatId, botConstants.messages.successfullyPublishPost, {
-      parse_mode: 'HTML',
-      reply_markup: botConstants.markups.publishPostMarkup,
-    });
+    const msg = await this.tgBot.sendMessage(
+      this.chatId,
+      botConstants.messages.successfullyPublishPost,
+      {
+        parse_mode: 'HTML',
+        reply_markup: botConstants.markups.publishPostMarkup,
+      },
+    );
+    return msg;
   }
 
   async sendErrorPublishPost(error) {
-    await this.tgBot.sendMessage(
+    const msg = await this.tgBot.sendMessage(
       this.chatId,
       botConstants.messages.errorPublishPost + ' ' + error,
       { parse_mode: 'HTML', reply_markup: botConstants.markups.publishPostMarkup },
     );
+    return msg;
   }
 
   async sendSuccessfullyUpdatedMyChannels() {
@@ -1160,17 +1303,27 @@ class CommandsHandler {
   }
 
   async sendSuccessfullyEditedText() {
-    await this.tgBot.sendMessage(this.chatId, botConstants.messages.successfullyEditedText, {
-      parse_mode: 'HTML',
-      reply_markup: botConstants.markups.editPostMarkup,
-    });
+    let msg = await this.tgBot.sendMessage(
+      this.chatId,
+      botConstants.messages.successfullyEditedText,
+      {
+        parse_mode: 'HTML',
+        reply_markup: botConstants.markups.editPostMarkup,
+      },
+    );
+    return msg;
   }
 
   async sendErrorEditedText(error) {
-    await this.tgBot.sendMessage(this.chatId, botConstants.messages.errorEditedText + ' ' + error, {
-      parse_mode: 'HTML',
-      reply_markup: botConstants.markups.editPostMarkup,
-    });
+    let msg = await this.tgBot.sendMessage(
+      this.chatId,
+      botConstants.messages.errorEditedText + ' ' + error,
+      {
+        parse_mode: 'HTML',
+        reply_markup: botConstants.markups.editPostMarkup,
+      },
+    );
+    return msg;
   }
 
   async sendSubscribedChannels() {
