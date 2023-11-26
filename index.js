@@ -96,6 +96,12 @@ class Bot {
 
     for (const post of postsToSend) {
       await this.sendPost(post);
+      if (!this.state.active || this.state.isSenderBlocked) {
+        setTimeout(() => {
+          this.loopPostSender();
+        }, 1000 * 10);
+        return;
+      }
       await this.delay(5);
     }
 
