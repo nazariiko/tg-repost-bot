@@ -24,6 +24,11 @@ const parseChannels = async (dbClient) => {
   }
 
   for (const channel of channelsToParse) {
+    const badChannels = await db.collection('bad_channels').findOne();
+    if (badChannels.items.includes(channel)) {
+      continue;
+    }
+
     try {
       const response = await axios(`https://tg.i-c-a.su/rss/${channel}?limit=30`);
       const data = response.data;
@@ -100,13 +105,14 @@ const parseChannels = async (dbClient) => {
       }
     } catch (error) {
       const msg = error?.response?.statusText;
-      const status = error?.response?.status;
       console.log(msg);
       switch (msg) {
         case 'This peer is not present in the internal peer database':
           await db
             .collection('connections')
             .updateMany({}, { $pull: { subscribedChannels: { $in: [channel] } } });
+
+          await db.collection('bad_channels').findOneAndUpdate({}, { $push: { items: channel } });
           break;
 
         default:

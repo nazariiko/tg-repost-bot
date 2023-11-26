@@ -62,6 +62,7 @@ class Bot {
 
   async build() {
     this.db = await this.dbClient.db('tg_repost_bot');
+
     const currentConnection = await this.db
       .collection('connections')
       .findOne({ chatId: this.chatId });
