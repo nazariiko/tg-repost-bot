@@ -45,6 +45,7 @@ class Bot {
     this.openai = openai;
     this.sendedPostMessages = [];
     this.sendedMediaItemsForDelete = [];
+    this.gptMessages = [];
     this.currentEditingPostLink = null;
     this.currentPublishChannel = null;
     this.commandsHandler = new CommandsHandler(this.tgBot, this.dbClient, this.chatId);
@@ -361,6 +362,7 @@ class Bot {
           await this.sendMessageWithChoseChannel(myChanels);
           break;
 
+        // gpt page
         case botConstants.commands.editOnGPTPage:
           if (this.state.page !== 'gptPage') return;
           await this.tgBot.sendMessage(this.chatId, botConstants.messages.editTextOnGPT, {
@@ -369,6 +371,16 @@ class Bot {
           });
           break;
 
+        case botConstants.commands.updateContext:
+          if (this.state.page !== 'gptPage') return;
+          this.gptMessages = [];
+          await this.sendSimpleMessage(
+            botConstants.messages.contextUpdated,
+            botConstants.markups.chatGPTMarkup,
+          );
+          break;
+
+        // back commands
         case botConstants.commands.back:
           switch (this.state.page) {
             case 'editPostPage':
@@ -395,7 +407,8 @@ class Bot {
         this.state.page === 'gptPage' &&
         text !== botConstants.commands.back &&
         text !== botConstants.commands.editOnGPTPage &&
-        text !== botConstants.commands.goToGPT
+        text !== botConstants.commands.goToGPT &&
+        text !== botConstants.commands.updateContext
       ) {
         this.handleMessageToGPT(text);
       }
@@ -458,24 +471,23 @@ class Bot {
   async handleMessageToGPT(text) {
     await this.sendSimpleMessage(botConstants.messages.waitGPT, botConstants.markups.chatGPTMarkup);
     try {
+      this.gptMessages.push({ role: 'user', content: text });
       const completion = await this.openai.chat.completions.create({
-        messages: [
-          {
-            role: 'system',
-            content: `${text}`,
-          },
-        ],
+        messages: this.gptMessages,
         model: 'gpt-4-1106-preview',
       });
       const result = completion.choices[0]['message']['content'];
       await this.sendSimpleMessage(result, botConstants.markups.chatGPTMarkup);
+      this.gptMessages.push({ role: 'assistant', content: result });
     } catch (error) {
       await this.sendSimpleMessage(`Ошибка ${error}`, botConstants.markups.chatGPTMarkup);
+      this.gptMessages = [];
     }
   }
 
   async goToGPT() {
     this.state.page = 'gptPage';
+    this.gptMessages = [];
     this.state.isSenderBlocked = true;
     await this.sendSimpleMessage(
       botConstants.messages.currentPost,
