@@ -521,6 +521,7 @@ class Bot {
       { chatId: this.chatId },
       { $pull: { posts: { sended: true } } }
     );
+    await this.sendSimpleMessage('Отправленные посты удаленны с базы данных.', botConstants.markups.startMarkup)
   }
 
   async handleSendBindMessageToGpt(msg) {
