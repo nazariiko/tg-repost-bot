@@ -94,6 +94,8 @@ class Bot {
     const posts = currentConnection.posts;
     const postsToSend = posts.filter((post) => !post.sended && !post.deleted);
 
+    // console.log(postsToSend, 'postsToSend');
+
     for (const post of postsToSend) {
       await this.sendPost(post);
       if (!this.state.active || this.state.isSenderBlocked) {
@@ -190,6 +192,11 @@ class Bot {
         await this.setPostIsSended(post);
         resolve(true);
       } catch (error) {
+        const errorCode = error?.response?.body?.error_code;
+        if (errorCode === 400) {
+          await this.setPostIsSended(post)
+        }
+        console.log(error?.response?.body);
         resolve(true);
       }
     });
@@ -334,6 +341,11 @@ class Bot {
           if (this.state.page !== 'startPage') return;
           this.state.active = false;
           this.commandsHandler.stopWatcherMessage();
+          break;
+
+        case botConstants.commands.clearDatabase:
+          if (this.state.page !== 'startPage') return;
+          await this.handleClearOldPosts();
           break;
 
         // editing page
@@ -502,6 +514,13 @@ class Bot {
           break;
       }
     });
+  }
+
+  async handleClearOldPosts() {
+    await this.db.collection('connections').updateMany(
+      { chatId: this.chatId },
+      { $pull: { posts: { sended: true } } }
+    );
   }
 
   async handleSendBindMessageToGpt(msg) {

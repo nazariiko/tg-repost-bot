@@ -6,6 +6,7 @@ const botConstants = {
     updateMyChannels: 'Обновить список моих каналов',
     startWatcher: 'Запустить отслеживание',
     stopWatcher: 'Остановить отслеживание',
+    clearDatabase: 'Очистить базу данных отправленных постов',
     deletePost: 'delete_post',
     deleteMediaItem: 'delete_media_item',
     editPost: 'edit_post',
@@ -80,6 +81,7 @@ const botConstants = {
         ],
         [{ text: 'Показать список моих каналов' }, { text: 'Обновить список моих каналов' }],
         [{ text: 'Запустить отслеживание' }, { text: 'Остановить отслеживание' }],
+        [{ text: 'Очистить базу данных отправленных постов' }],
       ],
     },
 
